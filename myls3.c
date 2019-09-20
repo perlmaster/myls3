@@ -22,6 +22,7 @@
 #include	<getopt.h>
 
 #define	EQ(s1,s2)	(strcmp(s1,s2)==0)
+#define	NE(s1,s2)	(strcmp(s1,s2)!=0)
 #define	GT(s1,s2)	(strcmp(s1,s2)>0)
 #define	LT(s1,s2)	(strcmp(s1,s2)<0)
 #define	LE(s1,s2)	(strcmp(s1,s2)<=0)
@@ -38,6 +39,16 @@ typedef	struct list_tag {
 	FILEDATA	*last;
 } LIST;
 
+typedef struct name_tag {
+	char	*name;
+	struct name_tag	*next_name;
+} NAME;
+typedef struct nameslist_tag {
+	NAME	*first_name;
+	NAME	*last_name;
+	int		num_names;
+} NAMESLIST;
+
 static	char	ftypes[] = {
  '.' , 'p' , 'c' , '?' , 'd' , '?' , 'b' , '?' , '-' , '?' , 'l' , '?' , 's' , '?' , '?' , '?'
 };
@@ -49,14 +60,13 @@ static char	*perms[] = {
 static char	*months[12] = { "Jan" , "Feb" , "Mar" , "Apr" , "May" , "Jun" ,
 				"Jul" , "Aug" , "Sep" , "Oct" , "Nov" , "Dec" } ;
 
-static	int		opt_d = 0 , opt_t = 0 , opt_s = 0;
+static	int		opt_d = 0 , opt_t = 0 , opt_s = 0 , opt_R = 0;
 static	int		opt_n = 0 , opt_D = 0 , opt_r = 0 , opt_h = 0;
 static	int		num_args;
 static	LIST	Files = { 0 , NULL , NULL };
 
 extern	int		optind , optopt , opterr;
 
-extern	int		list_file_attr();
 extern	void	system_error() , quit() , die();
 
 /*********************************************************************
@@ -120,6 +130,7 @@ void usage(char *pgm)
 	fprintf(stderr,"n - sort filenames by name\n");
 	fprintf(stderr,"r - reverse sort order\n");
 	fprintf(stderr,"h - produce this summary\n");
+	fprintf(stderr,"R - recursively process directories\n");
 
 	return;
 } /* end of usage */
@@ -505,10 +516,18 @@ int list_directory(char *dirpath)
 	struct _stat	filestats;
 	char	*name , filename[1024] , dirname[1024];
 	int		current_directory;
+	NAMESLIST	subdirs;
+	unsigned short	filemode;
+	NAME	*dir;
+
+	debug_print("list_directory(%s)\n",dirpath);
+
+	subdirs.num_names = 0;
+	subdirs.first_name = NULL;
+	subdirs.last_name = NULL;
 
 	strcpy(dirname,dirpath);
 	trim_trailing_chars(dirname,'/');
-	debug_print("list_directory(%s)\n",dirname);
 	dirptr = _opendir(dirname);
 	if ( dirptr == NULL ) {
 		quit(1,"_opendir failed for \"%s\"",dirname);
@@ -527,10 +546,37 @@ int list_directory(char *dirpath)
 		} /* IF */
 		else {
 			add_file_to_list(filename,&filestats);
+			filemode = filestats.st_mode & _S_IFMT;
+			if ( _S_ISDIR(filemode) && opt_R && NE(name,".") && NE(name,"..") ) {
+				subdirs.num_names += 1;
+				dir = (NAME *)calloc(1,sizeof(NAME));
+				if ( dir == NULL ) {
+					quit(1,"calloc failed for NAME");
+				}
+				dir->name = _strdup(filename);
+				if ( dir->name == NULL ) {
+					quit(1,"strdup failed for dir.name");
+				}
+				if ( subdirs.num_names == 1 ) {
+					subdirs.first_name = dir;
+				}
+				else {
+					subdirs.last_name->next_name = dir;
+				}
+				subdirs.last_name = dir;
+			} /* IF recursive processing requested */
 		} /* ELSE */
 	} /* FOR */
 	debug_print("list_directory(%s) ; all entries processed\n",dirname);
 	_closedir(dirptr);
+
+	if ( opt_R ) {
+		dir = subdirs.first_name;
+		for ( ; dir != NULL ; dir = dir->next_name ) {
+			debug_print("list_directory() : recursively process '%s' under '%s'\n",dir->name,dirpath);
+			list_directory(dir->name);
+		}
+	}
 
 	return(0);
 } /* end of list_directory */
@@ -698,28 +744,31 @@ int main(int argc, char *argv[])
 	FILEDATA	*file_node;
 
 	errflag = 0;
-	while ( (c = _getopt(argc,argv,":hgiDdtsnr")) != -1 ) {
+	while ( (c = _getopt(argc,argv,":hgiDdtsnrR")) != -1 ) {
 		switch (c) {
 		case 'h':
-			opt_h=1;
+			opt_h = 1;
 			break;
 		case 'r':
-			opt_r=1;
+			opt_r = 1;
+			break;
+		case 'R':
+			opt_R = 1;
 			break;
 		case 'd':
-			opt_d=1;
+			opt_d = 1;
 			break;
 		case 'D':
-			opt_D=1;
+			opt_D = 1;
 			break;
 		case 't':
-			opt_t=1;
+			opt_t = 1;
 			break;
 		case 's':
-			opt_s=1;
+			opt_s = 1;
 			break;
 		case 'n':
-			opt_n=1;
+			opt_n = 1;
 			break;
 		case '?':
 			printf("Unknown option '%c'\n",optopt);
@@ -757,7 +806,7 @@ int main(int argc, char *argv[])
 			} /* IF */
 			else {
 				filemode = filestats.st_mode & _S_IFMT;
-				if ( filemode == _S_IFDIR && opt_d == 0 ) {
+				if ( _S_ISDIR(filemode) && opt_d == 0 ) {
 					list_directory(filename);
 				} /* IF */
 				else {
